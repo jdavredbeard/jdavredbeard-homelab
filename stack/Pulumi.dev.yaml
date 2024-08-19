@@ -1,4 +1,0 @@
-config:
-  aws:region: us-west-2
-environment:
-  - "personal-861617279283"
