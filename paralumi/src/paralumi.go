@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"log"
 
 	"github.com/pulumi/pulumi/sdk/v3/go/auto"
 	"github.com/pulumi/pulumi/sdk/v3/go/auto/optpreview"
@@ -122,6 +123,11 @@ func getAllPreviewResults(ctx context.Context, org string, project string, envs 
 	wg := new(sync.WaitGroup)
 	c := make(chan PreviewResult, len(envs))
 
+	err := os.Mkdir("preview-stdout", 0750)
+	if err != nil && !os.IsExist(err) {
+		log.Fatal(err)
+	}
+
 	for _, env := range envs {
 		wg.Add(1)
 		go func(env string) {
@@ -152,12 +158,26 @@ func getPreviewResult(ctx context.Context, fqsn string, env string, localWorkspa
 		fmt.Printf("failed to UpsertStack: %v", err)
 		os.Exit(1)
 	}
-	err = localWorkspace.AddEnvironments(ctx, fqsn, env)
+	// check if environments already associated with workspace
+	existingWorkspaceEnvs, err := localWorkspace.ListEnvironments(ctx, fqsn)
+	if !slices.Contains(existingWorkspaceEnvs, env) {
+		err = localWorkspace.AddEnvironments(ctx, fqsn, env)
+		if err != nil {
+			fmt.Printf("failed to AddEnvironments %v for %v", env, fqsn)
+			os.Exit(1)
+		}
+	}
 
-	// stdoutStreamer := optpreview.ProgressStreams(os.Stdout)
-	// previewResult, err := stack.Preview(ctx, stdoutStreamer, optpreview.Diff())
+	stdoutOutputFile, err := os.Create(fmt.Sprintf("preview-stdout/%v", env))
+	if err != nil {
+		fmt.Println(err)
+		os.Exit(1)
+	}
+	defer stdoutOutputFile.Close()
 
-	previewResult, err := stack.Preview(ctx, optpreview.Diff())
+	stdoutStreamer := optpreview.ProgressStreams(stdoutOutputFile)
+	previewResult, err := stack.Preview(ctx, stdoutStreamer, optpreview.Diff())
+
 	if err != nil {
 		err = err.(autoError)
 		return PreviewResult{}, newAutoError(fmt.Errorf("failed to Preview %v in %v", fqsn, env), previewResult.StdOut, previewResult.StdErr, 1)
@@ -210,13 +230,7 @@ func main() {
 	}
 
 	filteredEnvs := filterEnvsByConfigValue(ctx, *org, envs, configKey, desiredConfigValue, localWorkspace.PulumiCommand())
-	// fmt.Println(filteredEnvs)
-
-	// check if environments already associated with workspace
-	// existingWorkspaceEnvs, err := localWorkspace.ListEnvironments(ctx, *stackName)
-	// fmt.Printf("Existing local workspace environments: %v\n", existingWorkspaceEnvs)
-
-	// TODO: remove existing environments ()
+	fmt.Println(filteredEnvs)
 	
 	project, err := localWorkspace.ProjectSettings(ctx)
 	if err != nil {
@@ -225,6 +239,10 @@ func main() {
 	projectName := project.Name.String()
 
 	fmt.Println()
+
+	// TODO: Rather than only creating new stacks with the env-stackname scheme and deploying 
+	// to the list of environments, find stacks in this directory already deployed to those environments, 
+	// keep a list of those stacks and update them, and remove those environments from the list
 	
 	previewResults := getAllPreviewResults(ctx, *org, projectName, filteredEnvs, *stackName, localWorkspace)
 

@@ -22,7 +22,6 @@ for (let i=0; i<5; i++) {
 }
 
 // create staging group envs
-envContentsYaml = yaml.parse(envContents);
 envContentsYaml.values.pulumiConfig.group = "staging";
 for (let i=0; i<4; i++) {
     envContentsYaml.values.pulumiConfig.animal = animals[i]
@@ -34,7 +33,6 @@ for (let i=0; i<4; i++) {
 }
 
 // create prod group envs
-envContentsYaml = yaml.parse(envContents);
 envContentsYaml.values.pulumiConfig.group = "prod";
 for (let i=0; i<3; i++) {
     envContentsYaml.values.pulumiConfig.animal = animals[i]
