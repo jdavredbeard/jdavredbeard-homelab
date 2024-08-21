@@ -1,0 +1,6 @@
+/bin/
+/node_modules/
+/automation/node_modules
+/stack/node_modules
+/environments/node_modules
+paralumi/bin/*
