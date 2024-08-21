@@ -76,7 +76,7 @@ func getConfigValue(ctx context.Context, orgName string, envName string, configP
 	var value string
 	err = json.Unmarshal([]byte(stdout), &value)
 	if err != nil {
-		return "", fmt.Errorf("unable to unmarshal config value: %w", err)
+		return "", fmt.Errorf("unable to unmarshal config value: %w\n", err)
 	}
 	return value, nil
 }
@@ -96,7 +96,7 @@ func filterEnvsByConfigValue(ctx context.Context, org string, envs []string, con
 			defer wg.Done()
 			configValue, err := getConfigValue(ctx, org, env, "pulumiConfig."+configKey, pulumiCommand)
 			if err != nil {
-				fmt.Printf("failed to getConfigValue %v for environment %v: %v", configKey, env, err)
+				fmt.Printf("failed to getConfigValue %v for environment %v: %v\n", configKey, env, err)
 			} else {
 				if configValue == desiredConfigValue {
 					c <- env
@@ -119,7 +119,7 @@ type PreviewResult struct {
 	Environment string
 }
 
-func getAllPreviewResults(ctx context.Context, org string, project string, envs []string, stackName string, localWorkspace auto.Workspace) []PreviewResult {
+func getAllPreviewResults(ctx context.Context, org string, project string, envs []string, stackName string, existingStacksInEnvs map[string][]string, localWorkspace auto.Workspace) []PreviewResult {
 	wg := new(sync.WaitGroup)
 	c := make(chan PreviewResult, len(envs))
 
@@ -132,11 +132,17 @@ func getAllPreviewResults(ctx context.Context, org string, project string, envs 
 		wg.Add(1)
 		go func(env string) {
 			defer wg.Done()
-			envAndStack := env + "-" + stackName
-			fqsn := auto.FullyQualifiedStackName(org, project, envAndStack)
+			var fqsn string
+			if len(existingStacksInEnvs[env]) == 0 {
+				envAndStack := env + "-" + stackName
+				fqsn = auto.FullyQualifiedStackName(org, project, envAndStack)
+			} else {
+				fqsn = auto.FullyQualifiedStackName(org, project, existingStacksInEnvs[env][0])
+			}
+			
 			previewResult, err := getPreviewResult(ctx, fqsn, env, localWorkspace)
 			if err != nil {
-				fmt.Printf("failed to getPreviewResult for %v for environment %v: %v", fqsn, env)
+				fmt.Printf("failed to getPreviewResult for %v for environment %v: %v\n", fqsn, env)
 			} else {
 				c <- previewResult
 			}
@@ -155,15 +161,14 @@ func getPreviewResult(ctx context.Context, fqsn string, env string, localWorkspa
 	fmt.Printf("Running Preview on stack %v in env %v...\n", fqsn, env)
 	stack, err := auto.UpsertStack(ctx, fqsn, localWorkspace)
 	if err != nil {
-		fmt.Printf("failed to UpsertStack: %v", err)
-		os.Exit(1)
+		fmt.Printf("failed to UpsertStack: %v\n", err)
 	}
 	// check if environments already associated with workspace
 	existingWorkspaceEnvs, err := localWorkspace.ListEnvironments(ctx, fqsn)
 	if !slices.Contains(existingWorkspaceEnvs, env) {
 		err = localWorkspace.AddEnvironments(ctx, fqsn, env)
 		if err != nil {
-			fmt.Printf("failed to AddEnvironments %v for %v", env, fqsn)
+			fmt.Printf("failed to AddEnvironments %v for %v\n", env, fqsn)
 			os.Exit(1)
 		}
 	}
@@ -180,7 +185,7 @@ func getPreviewResult(ctx context.Context, fqsn string, env string, localWorkspa
 
 	if err != nil {
 		err = err.(autoError)
-		return PreviewResult{}, newAutoError(fmt.Errorf("failed to Preview %v in %v", fqsn, env), previewResult.StdOut, previewResult.StdErr, 1)
+		return PreviewResult{}, newAutoError(fmt.Errorf("failed to Preview %v in %v\n", fqsn, env), previewResult.StdOut, previewResult.StdErr, 1)
 	}
 	return PreviewResult{
 		FQSN: fqsn,
@@ -189,62 +194,8 @@ func getPreviewResult(ctx context.Context, fqsn string, env string, localWorkspa
 	}, err
 }
 
-func main() {
-	flagSet := flag.NewFlagSet("flagset", flag.ExitOnError)
-	org := flagSet.String("org", "", "pulumi cloud organization")
-	configKeyValue := flagSet.String("config", "", "config key and value to filter by: {key}:{value}")
-	stackName := flagSet.String("stackName", "", "stack name")
-
-	command := ""
-	commands := []string{"preview", "up"}
-	command = os.Args[1]
-	if !slices.Contains(commands, command) {
-		fmt.Printf("valid paralumi commands include %v", commands)
-		os.Exit(1)
-	}
-
-	configKey := ""
-	desiredConfigValue := ""
-	flagSet.Parse(os.Args[2:])
-	if *org != "" && *configKeyValue != "" && *stackName != "" {
-		configKey = strings.Split(*configKeyValue, ":")[0]
-		desiredConfigValue = strings.Split(*configKeyValue, ":")[1]
-	} else {
-		fmt.Println(*org, *configKeyValue, *stackName)
-		fmt.Printf("paralumi requires flags: -stackName, -config, and -org")
-		os.Exit(1)
-	}
-
-	ctx := context.Background()
-
-	localWorkspace, err := auto.NewLocalWorkspace(ctx, auto.WorkDir("."))
-	if err != nil {
-		fmt.Printf("failed to create LocalWorkspace: %v", err)
-		os.Exit(1)
-	}
-
-	envs, err := listEnvironmentsForOrg(ctx, *org, localWorkspace.PulumiCommand())
-	if err != nil {
-		fmt.Printf("failed to listEnvironmentsForOrg: %v", err)
-		os.Exit(1)
-	}
-
-	filteredEnvs := filterEnvsByConfigValue(ctx, *org, envs, configKey, desiredConfigValue, localWorkspace.PulumiCommand())
-	fmt.Println(filteredEnvs)
-	
-	project, err := localWorkspace.ProjectSettings(ctx)
-	if err != nil {
-		fmt.Printf("failed to get ProjectSettings: %v\n", err)
-	}
-	projectName := project.Name.String()
-
-	fmt.Println()
-
-	// TODO: Rather than only creating new stacks with the env-stackname scheme and deploying 
-	// to the list of environments, find stacks in this directory already deployed to those environments, 
-	// keep a list of those stacks and update them, and remove those environments from the list
-	
-	previewResults := getAllPreviewResults(ctx, *org, projectName, filteredEnvs, *stackName, localWorkspace)
+func printPreviewTable(ctx context.Context, org string, project string, envs []string, stack string, existingStacksInEnvs map[string][]string, localWorkspace auto.Workspace) {
+	previewResults := getAllPreviewResults(ctx, org, project, envs, stack, existingStacksInEnvs, localWorkspace)
 
 	// draw the table
 	fmt.Println()
@@ -259,4 +210,100 @@ func main() {
 	}
 
 	tbl.Print()
+}
+
+func getExistingStacksInEnvs(ctx context.Context, envs []string, localWorkspace auto.Workspace) map[string][]string {
+	workspaceStackSummaries, err := localWorkspace.ListStacks(ctx)
+	if err != nil {
+		fmt.Printf("failed to ListStacks in localWorkspace: %v\n", err)
+		os.Exit(1)
+	}
+
+	stacksInEnv := map[string][]string{}
+
+	for _, summary := range workspaceStackSummaries {
+		existingStackEnvs, err := localWorkspace.ListEnvironments(ctx, summary.Name)
+		if err != nil {
+			fmt.Printf("failed to ListEnvironments in localWorkspace: %v\n", err)
+			os.Exit(1)
+		}
+		for _, existingStackEnv := range existingStackEnvs {
+			if slices.Contains(envs, existingStackEnv) {
+				stacksInEnv[existingStackEnv] = append(stacksInEnv[existingStackEnv], summary.Name)
+			}
+		}
+	}
+
+	for env, stacks := range stacksInEnv {
+		if len(stacks) > 1 {
+			fmt.Printf("multiple existing stacks %v in environment %v: paralumi requires one stack per environment.", stacks, env)
+			os.Exit(1)
+		}
+	}
+
+	return stacksInEnv
+}
+
+func main() {
+	flagSet := flag.NewFlagSet("flagset", flag.ExitOnError)
+	org := flagSet.String("org", "", "pulumi cloud organization")
+	configKeyValue := flagSet.String("config", "", "config key and value to filter by: {key}:{value}")
+	stackName := flagSet.String("stackName", "", "stack name")
+
+	command := ""
+	commands := []string{"preview", "up"}
+	command = os.Args[1]
+	if !slices.Contains(commands, command) {
+		fmt.Printf("valid paralumi commands include %v\n", commands)
+		os.Exit(1)
+	}
+
+	configKey := ""
+	desiredConfigValue := ""
+	flagSet.Parse(os.Args[2:])
+	if *org != "" && *configKeyValue != "" && *stackName != "" {
+		configKey = strings.Split(*configKeyValue, ":")[0]
+		desiredConfigValue = strings.Split(*configKeyValue, ":")[1]
+	} else {
+		fmt.Println(*org, *configKeyValue, *stackName)
+		fmt.Printf("paralumi requires flags: -stackName, -config, and -org\n")
+		os.Exit(1)
+	}
+
+	ctx := context.Background()
+
+	localWorkspace, err := auto.NewLocalWorkspace(ctx, auto.WorkDir("."))
+	if err != nil {
+		fmt.Printf("failed to create LocalWorkspace: %v\n", err)
+		os.Exit(1)
+	}
+
+	envs, err := listEnvironmentsForOrg(ctx, *org, localWorkspace.PulumiCommand())
+	if err != nil {
+		fmt.Printf("failed to listEnvironmentsForOrg: %v\n", err)
+		os.Exit(1)
+	}
+
+	filteredEnvs := filterEnvsByConfigValue(ctx, *org, envs, configKey, desiredConfigValue, localWorkspace.PulumiCommand())
+	
+	project, err := localWorkspace.ProjectSettings(ctx)
+	if err != nil {
+		fmt.Printf("failed to get ProjectSettings: %v\n", err)
+	}
+	projectName := project.Name.String()
+
+	fmt.Println()
+
+	// TODO: Rather than only creating new stacks with the env-stackname scheme and deploying 
+	// to the list of environments, find stacks in this directory already deployed to those environments, 
+	// keep a list of those stacks and update them, and remove those environments from the list
+	existingStacksInEnvs := getExistingStacksInEnvs(ctx, filteredEnvs, localWorkspace)
+	
+	switch command {
+		case "preview": 
+			printPreviewTable(ctx, *org, projectName, filteredEnvs, *stackName, existingStacksInEnvs, localWorkspace)
+		// case "up":
+		// 	printUpTable(ctx, *org, projectName, filteredEnvs, *stackName, localWorkspace)
+	}
+	
 }
