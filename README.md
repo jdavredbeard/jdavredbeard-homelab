@@ -12,6 +12,8 @@ Write an MVP of `paralumi` in Go - the pulumi version of paraterra. Instead of u
 
 How it went:
 
+![TLDR - it worked!](preview-screenshot.png "TLDR - it worked!")
+
 First I defined a Typescript Pulumi stack of Environments. Since I only have access to a couple AWS accounts at Pulumi, I made all the Environments point at the same account. I added two config values for potential grouping - `animal`, which might stand in for a more realistic usage like `app` or `team` - and `group`, which holds environment level values (dev, staging, prod). This way, you can select either all environments of a certain level (`group:dev`), or all environments of a certain animal\team (`animal:wombat`). As far as the pulumi code goes, this was very easy and fast to write, especially as it made sense to use loops to define the Environments, and the `fs` module to read the base yaml from a file.
 
 One thing I notice here is that the `yaml` property of the Environment resource is considered a secret (which probably makes sense since it would often contain credentials) - but since the Environment resource is resolving dynamic credentials, running `pulumi refresh --preview-only` shows drift on the `yaml` property whenever you run it - but you can't see what the drift is. This is unfortunate if the drift you are looking for is a config value that is not a secret - I wonder if there is a more granular way to define this property?
