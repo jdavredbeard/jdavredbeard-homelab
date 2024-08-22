@@ -5,5 +5,6 @@
 /environments/node_modules
 paralumi/bin/*
 /example-stack/preview-stdout
+/example-stack/up-stdout
 /example-stack/node_modules
 /example-stack/Pulumi.*.yaml

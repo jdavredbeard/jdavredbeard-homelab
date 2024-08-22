@@ -13,6 +13,7 @@ import (
 
 	"github.com/pulumi/pulumi/sdk/v3/go/auto"
 	"github.com/pulumi/pulumi/sdk/v3/go/auto/optpreview"
+	"github.com/pulumi/pulumi/sdk/v3/go/auto/optup"
 	"github.com/pulumi/pulumi/sdk/v3/go/common/apitype"
 
 	"github.com/fatih/color"
@@ -51,20 +52,6 @@ func listEnvironmentsForOrg(ctx context.Context, orgName string, pulumiCmd auto.
 	}
 	envs := strings.Split(strings.TrimSpace(stdout), "\n")
 	return envs, nil
-}
-
-func openEnv(ctx context.Context, envName string, pulumiCmd auto.PulumiCommand) (environment, error) {
-	args := []string{"env", "open", envName}
-	stdout, stderr, errCode, err := runPulumiCmd(ctx, pulumiCmd, args)
-	if err != nil {
-		return environment{}, newAutoError(fmt.Errorf("unable to list environments: %w", err), stdout, stderr, errCode)
-	}
-	var env environment
-	err = json.Unmarshal([]byte(stdout), &env)
-	if err != nil {
-		return environment{}, fmt.Errorf("unable to unmarshal environment value: %w", err)
-	}
-	return env, nil
 }
 
 func getConfigValue(ctx context.Context, orgName string, envName string, configPath string, pulumiCmd auto.PulumiCommand) (string, error) {
@@ -142,7 +129,7 @@ func getAllPreviewResults(ctx context.Context, org string, project string, envs 
 			
 			previewResult, err := getPreviewResult(ctx, fqsn, env, localWorkspace)
 			if err != nil {
-				fmt.Printf("failed to getPreviewResult for %v for environment %v: %v\n", fqsn, env)
+				fmt.Printf("failed to getPreviewResult for %v for environment %v: %v\n", fqsn, env, err)
 			} else {
 				c <- previewResult
 			}
@@ -169,14 +156,12 @@ func getPreviewResult(ctx context.Context, fqsn string, env string, localWorkspa
 		err = localWorkspace.AddEnvironments(ctx, fqsn, env)
 		if err != nil {
 			fmt.Printf("failed to AddEnvironments %v for %v\n", env, fqsn)
-			os.Exit(1)
 		}
 	}
 
 	stdoutOutputFile, err := os.Create(fmt.Sprintf("preview-stdout/%v", env))
 	if err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		fmt.Printf("failed to create file preview-stdout/%v: %v", env, err)
 	}
 	defer stdoutOutputFile.Close()
 
@@ -184,8 +169,7 @@ func getPreviewResult(ctx context.Context, fqsn string, env string, localWorkspa
 	previewResult, err := stack.Preview(ctx, stdoutStreamer, optpreview.Diff())
 
 	if err != nil {
-		err = err.(autoError)
-		return PreviewResult{}, newAutoError(fmt.Errorf("failed to Preview %v in %v\n", fqsn, env), previewResult.StdOut, previewResult.StdErr, 1)
+		return PreviewResult{}, err
 	}
 	return PreviewResult{
 		FQSN: fqsn,
@@ -207,6 +191,103 @@ func printPreviewTable(ctx context.Context, org string, project string, envs []s
 
 	for _, result := range previewResults {
 		tbl.AddRow(result.FQSN, result.Environment, result.ChangeSummary["create"], result.ChangeSummary["update"], result.ChangeSummary["destroy"])
+	}
+
+	tbl.Print()
+}
+
+type UpResult struct {
+	FQSN string
+	UpdateSummary auto.UpdateSummary
+	Environment string
+}
+
+func getAllUpResults(ctx context.Context, org string, project string, envs []string, stackName string, existingStacksInEnvs map[string][]string, localWorkspace auto.Workspace) []UpResult {
+	wg := new(sync.WaitGroup)
+	c := make(chan UpResult, len(envs))
+
+	err := os.Mkdir("up-stdout", 0750)
+	if err != nil && !os.IsExist(err) {
+		log.Fatal(err)
+	}
+
+	for _, env := range envs {
+		wg.Add(1)
+		go func(env string) {
+			defer wg.Done()
+			var fqsn string
+			if len(existingStacksInEnvs[env]) == 0 {
+				envAndStack := env + "-" + stackName
+				fqsn = auto.FullyQualifiedStackName(org, project, envAndStack)
+			} else {
+				fqsn = auto.FullyQualifiedStackName(org, project, existingStacksInEnvs[env][0])
+			}
+			
+			upResult, err := getUpResult(ctx, fqsn, env, localWorkspace)
+			if err != nil {
+				fmt.Printf("failed to getUpResult for %v for environment %v: %v\n", fqsn, env, err)
+			} else {
+				c <- upResult
+			}
+		}(env)
+	}
+	wg.Wait()
+	close(c)
+	var allUpResults []UpResult
+	for result := range c {
+		allUpResults = append(allUpResults, result)
+	}
+	return allUpResults
+}
+
+func getUpResult(ctx context.Context, fqsn string, env string, localWorkspace auto.Workspace) (UpResult, error) {
+	fmt.Printf("Running Up on stack %v in env %v...\n", fqsn, env)
+	stack, err := auto.UpsertStack(ctx, fqsn, localWorkspace)
+	if err != nil {
+		fmt.Printf("failed to UpsertStack: %v\n", err)
+	}
+	// check if environments already associated with workspace
+	existingWorkspaceEnvs, err := localWorkspace.ListEnvironments(ctx, fqsn)
+	if !slices.Contains(existingWorkspaceEnvs, env) {
+		err = localWorkspace.AddEnvironments(ctx, fqsn, env)
+		if err != nil {
+			fmt.Printf("failed to AddEnvironments %v for %v: %v\n", env, fqsn, err)
+		}
+	}
+
+	stdoutOutputFile, err := os.Create(fmt.Sprintf("up-stdout/%v", env))
+	if err != nil {
+		fmt.Printf("failed to create file up-stdout/%v: %v", env, err)
+	}
+	defer stdoutOutputFile.Close()
+
+	stdoutStreamer := optup.ProgressStreams(stdoutOutputFile)
+	upResult, err := stack.Up(ctx, stdoutStreamer, optup.Diff())
+
+	if err != nil {
+		return UpResult{}, err
+	}
+	return UpResult{
+		FQSN: fqsn,
+		UpdateSummary: upResult.Summary,
+		Environment: env,
+	}, err
+}
+
+func printUpTable(ctx context.Context, org string, project string, envs []string, stack string, existingStacksInEnvs map[string][]string, localWorkspace auto.Workspace) {
+	upResults := getAllUpResults(ctx, org, project, envs, stack, existingStacksInEnvs, localWorkspace)
+
+	// draw the table
+	fmt.Println()
+	headerFmt := color.New(color.FgGreen, color.Underline).SprintfFunc()
+	columnFmt := color.New(color.FgYellow).SprintfFunc()
+
+	tbl := table.New("FQSN", "env", "creates", "updates", "destroys")
+	tbl.WithHeaderFormatter(headerFmt).WithFirstColumnFormatter(columnFmt)
+
+	for _, result := range upResults {
+		changes := *result.UpdateSummary.ResourceChanges
+		tbl.AddRow(result.FQSN, result.Environment, changes["create"], changes["update"], changes["destroy"])
 	}
 
 	tbl.Print()
@@ -294,16 +375,13 @@ func main() {
 
 	fmt.Println()
 
-	// TODO: Rather than only creating new stacks with the env-stackname scheme and deploying 
-	// to the list of environments, find stacks in this directory already deployed to those environments, 
-	// keep a list of those stacks and update them, and remove those environments from the list
 	existingStacksInEnvs := getExistingStacksInEnvs(ctx, filteredEnvs, localWorkspace)
 	
 	switch command {
 		case "preview": 
 			printPreviewTable(ctx, *org, projectName, filteredEnvs, *stackName, existingStacksInEnvs, localWorkspace)
-		// case "up":
-		// 	printUpTable(ctx, *org, projectName, filteredEnvs, *stackName, localWorkspace)
+		case "up":
+			printUpTable(ctx, *org, projectName, filteredEnvs, *stackName, existingStacksInEnvs, localWorkspace)
 	}
 	
 }
