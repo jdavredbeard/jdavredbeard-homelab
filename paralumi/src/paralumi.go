@@ -333,6 +333,10 @@ func main() {
 
 	command := ""
 	commands := []string{"preview", "up"}
+	if len(os.Args) == 1 {
+		fmt.Println("paralumi usage: paralumi {preview/up} --org {organization} --config {key}:{value} --stackName {stackName}")
+		os.Exit(1)
+	}
 	command = os.Args[1]
 	if !slices.Contains(commands, command) {
 		fmt.Printf("valid paralumi commands include %v\n", commands)
