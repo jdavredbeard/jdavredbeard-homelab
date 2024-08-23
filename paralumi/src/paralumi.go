@@ -5,18 +5,18 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"slices"
 	"strings"
 	"sync"
-	"log"
 
 	"github.com/pulumi/pulumi/sdk/v3/go/auto"
 	"github.com/pulumi/pulumi/sdk/v3/go/auto/optpreview"
 	"github.com/pulumi/pulumi/sdk/v3/go/auto/optup"
 
 	"github.com/fatih/color"
-  	"github.com/rodaine/table"
+	"github.com/rodaine/table"
 )
 
 type autoError struct {
@@ -38,8 +38,6 @@ func newAutoError(err error, stdout, stderr string, code int) autoError {
 func (ae autoError) Error() string {
 	return fmt.Sprintf("%s\ncode: %d\nstdout: %s\nstderr: %s\n", ae.err, ae.code, ae.stdout, ae.stderr)
 }
-
-
 
 func runPulumiCmd(ctx context.Context, pulumiCmd auto.PulumiCommand, args []string) (string, string, int, error) {
 	return pulumiCmd.Run(ctx, ".", nil, nil, nil, nil, args...)
@@ -97,11 +95,11 @@ func filterEnvsByConfigValue(ctx context.Context, org string, envs []string, con
 }
 
 type Result struct {
-	FQSN string
+	FQSN        string
 	Environment string
-	Creates int
-	Updates int
-	Destroys int
+	Creates     int
+	Updates     int
+	Destroys    int
 }
 
 type Command int
@@ -114,7 +112,7 @@ const (
 func getAllResults(ctx context.Context, command Command, org string, project string, envs []string, stackName string, existingStacksInEnvs map[string][]string, localWorkspace auto.Workspace) []Result {
 	wg := new(sync.WaitGroup)
 	c := make(chan Result, len(envs))
-	
+
 	var dirName string
 
 	switch command {
@@ -143,7 +141,7 @@ func getAllResults(ctx context.Context, command Command, org string, project str
 			} else {
 				fqsn = auto.FullyQualifiedStackName(org, project, existingStacksInEnvs[env][0])
 			}
-			
+
 			result, err := getResult(ctx, command, fqsn, env, localWorkspace)
 			if err != nil {
 				fmt.Printf("failed to getResult for %v for environment %v: %v\n", fqsn, env, err)
@@ -194,11 +192,11 @@ func getResult(ctx context.Context, command Command, fqsn string, env string, lo
 		}
 
 		result = Result{
-			FQSN: fqsn,
+			FQSN:        fqsn,
 			Environment: env,
-			Creates: (*upResult.Summary.ResourceChanges)["create"],
-			Updates: (*upResult.Summary.ResourceChanges)["update"],
-			Destroys: (*upResult.Summary.ResourceChanges)["destroy"],
+			Creates:     (*upResult.Summary.ResourceChanges)["create"],
+			Updates:     (*upResult.Summary.ResourceChanges)["update"],
+			Destroys:    (*upResult.Summary.ResourceChanges)["destroy"],
 		}
 	case Preview:
 		stdoutOutputFile, err := os.Create(fmt.Sprintf("preview-stdout/%v", env))
@@ -214,14 +212,14 @@ func getResult(ctx context.Context, command Command, fqsn string, env string, lo
 			return Result{}, err
 		}
 		result = Result{
-			FQSN: fqsn,
+			FQSN:        fqsn,
 			Environment: env,
-			Creates: previewResult.ChangeSummary["create"],
-			Updates: previewResult.ChangeSummary["update"],
-			Destroys: previewResult.ChangeSummary["destroy"],
+			Creates:     previewResult.ChangeSummary["create"],
+			Updates:     previewResult.ChangeSummary["update"],
+			Destroys:    previewResult.ChangeSummary["destroy"],
 		}
 	}
-	
+
 	return result, err
 }
 
@@ -330,13 +328,13 @@ func main() {
 	fmt.Println()
 
 	existingStacksInEnvs := getExistingStacksInEnvs(ctx, filteredEnvs, localWorkspace)
-	
+
 	switch command {
-		case "preview": 
-			results := getAllResults(ctx, Preview, *org, projectName, filteredEnvs, *stackName, existingStacksInEnvs, localWorkspace)
-			printTable(ctx, results)
-		case "up":
-			results := getAllResults(ctx, Up, *org, projectName, filteredEnvs, *stackName, existingStacksInEnvs, localWorkspace)
-			printTable(ctx, results)
-	}	
+	case "preview":
+		results := getAllResults(ctx, Preview, *org, projectName, filteredEnvs, *stackName, existingStacksInEnvs, localWorkspace)
+		printTable(ctx, results)
+	case "up":
+		results := getAllResults(ctx, Up, *org, projectName, filteredEnvs, *stackName, existingStacksInEnvs, localWorkspace)
+		printTable(ctx, results)
+	}
 }
