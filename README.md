@@ -1,6 +1,6 @@
-# jdavredbeard-homelab  
+# paralumi  
 
-This repo currently holds `paralumi`, an example custom CLI that uses the Automation API to deploy pulumi stacks to groups of environments in parallel.  
+`paralumi` is an example custom CLI that uses the Automation API to deploy pulumi stacks to groups of environments in parallel.  
   
 See [the Good/Bad/Ugly doc](https://docs.google.com/document/d/1a3fWffJ_xGyRfFDpVPclmwhHxYtaYtH-N9RBQP-jO5g/edit?usp=sharing) for the full writeup.  
   
